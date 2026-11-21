@@ -113,6 +113,9 @@ SEND_STABLE_INTERVAL_MS = 500
 # This is a continuous observation window, NOT a single sleep: the loop polls
 # every SEND_POLL_INTERVAL_MS throughout it.
 SEND_INITIAL_CLEAN_GRACE_MS = 2_000
+# A failed bubble exposes Douyin's own retry control. Waiting before clicking it
+# avoids immediately hitting the same short-lived rate limit again.
+SEND_RETRY_DELAY_MS = 20_000
 
 
 async def send_message(page: Page, chat: DouyinChat, message: Message, stickers: dict[str, Sticker]) -> None:
@@ -156,7 +159,15 @@ async def send_text(chat: DouyinChat, content: str) -> None:
     before = await _mark_latest_outgoing_message(page)
     await page.wait_for_timeout(300)
     await _trigger_send(page)
-    await _confirm_outgoing_message(page, before, label="文字", expected_text=content)
+    try:
+        await _confirm_outgoing_message(page, before, label="文字", expected_text=content)
+    except PageOperationError as exc:
+        if "页面提示可以重试" not in str(exc):
+            raise
+        await page.wait_for_timeout(SEND_RETRY_DELAY_MS)
+        if not await _click_retry_on_latest_failed_message(page):
+            raise
+        await _confirm_outgoing_message(page, before, label="文字", expected_text=content)
 
 
 async def send_image(page: Page, image_path: str) -> None:
